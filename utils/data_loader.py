@@ -66,6 +66,9 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     
     df = pd.read_hdf(data_path)
     data = df.values
+
+    max_timesteps = 5000
+    data = data[:max_timesteps]
     
     num_nodes = data.shape[1]
     
@@ -90,10 +93,10 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     train_dataset = METRLA_Dataset(data, edge_index, edge_attr, seq_len, pred_len, 'train')
     val_dataset = METRLA_Dataset(data, edge_index, edge_attr, seq_len, pred_len, 'val')
     test_dataset = METRLA_Dataset(data, edge_index, edge_attr, seq_len, pred_len, 'test')
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     
     return train_loader, val_loader, test_loader, edge_index, edge_attr, scaler
 
