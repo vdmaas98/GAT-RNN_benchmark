@@ -8,7 +8,7 @@ import os
 from tqdm import tqdm
 import json
 
-from models import GATLSTM, GATGRU
+from models import GATLSTM, GATGRU, PlainLSTM
 from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon
 
 
@@ -120,6 +120,14 @@ def main(args):
             heads=args.heads,
             dropout=args.dropout
         ).to(device)
+    elif args.model == 'plainlstm':
+        model = PlainLSTM(
+            node_feat_dim=node_feat_dim,
+            hidden_dim=args.hidden_dim,
+            output_dim=args.pred_len,
+            num_layers=args.num_layers,
+            dropout=args.dropout
+        ).to(device)
     else:
         raise ValueError(f"Unknown model: {args.model}")
     
@@ -205,7 +213,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train GAT-LSTM/GRU on METR-LA')
     
-    parser.add_argument('--model', type=str, default='gatlstm', choices=['gatlstm', 'gatgru'],
+    parser.add_argument('--model', type=str, default='gatlstm', choices=['gatlstm', 'gatgru', 'plainlstm'],
                         help='Model architecture')
     parser.add_argument('--data_dir', type=str, default='./data/METR-LA',
                         help='Directory containing METR-LA data')
@@ -223,6 +231,8 @@ if __name__ == '__main__':
                         help='Number of attention heads')
     parser.add_argument('--dropout', type=float, default=0.3,
                         help='Dropout rate')
+    parser.add_argument('--num_layers', type=int, default=1,
+                        help='Number of LSTM layers for plainlstm')
     
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Batch size')
