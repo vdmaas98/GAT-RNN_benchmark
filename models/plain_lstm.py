@@ -24,7 +24,7 @@ class PlainLSTM(nn.Module):
             nn.Linear(hidden_dim, output_dim),
         )
 
-    def forward(self, x_seq):
+    def forward(self, x_seq, edge_index=None, edge_attr=None):
         b, t, n, f = x_seq.shape
         x_flat = x_seq.view(b * n, t, f)
 
