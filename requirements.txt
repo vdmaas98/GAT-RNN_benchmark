@@ -1,0 +1,7 @@
+torch==2.2.2
+torch-geometric==2.6.1
+numpy==2.0.2
+pandas==2.3.0
+scikit-learn==1.6.1
+tables==3.9.2
+tqdm==4.67.1
