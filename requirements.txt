@@ -1,7 +1,7 @@
 torch
 torch-geometric
-numpy==2.0.2
-pandas==2.3.0
+numpy
+pandas==2.2.2
 scikit-learn==1.6.1
 tables==3.9.2
 tqdm==4.67.1
