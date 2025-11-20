@@ -71,9 +71,9 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     data = data[:max_timesteps]
     
     num_nodes = data.shape[1]
-    
-    scaler = StandardScaler(mean=data[..., 0].mean(), std=data[..., 0].std())
-    data[..., 0] = scaler.transform(data[..., 0])
+
+    scaler = StandardScaler(mean=data.mean(), std=data.std())
+    data = scaler.transform(data)
     
     with open(adj_path, 'rb') as f:
         _, _, adj_mx = pickle.load(f, encoding='latin1')
