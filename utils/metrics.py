@@ -36,26 +36,9 @@ def masked_rmse(preds, labels, null_val=np.nan):
     return torch.sqrt(torch.mean(loss))
 
 
-def masked_mape(preds, labels, null_val=np.nan, epsilon=1e-5):
-    """
-    Masked Mean Absolute Percentage Error
-    """
-    if np.isnan(null_val):
-        mask = ~torch.isnan(labels)
-    else:
-        mask = (labels != null_val)
-    mask = mask.float()
-    mask /= torch.mean(mask)
-    mask = torch.where(torch.isnan(mask), torch.zeros_like(mask), mask)
-    loss = torch.abs((preds - labels) / (labels + epsilon))
-    loss = loss * mask
-    loss = torch.where(torch.isnan(loss), torch.zeros_like(loss), loss)
-    return torch.mean(loss) * 100
-
-
 def compute_all_metrics(preds, labels, null_val=np.nan):
     """
-    Compute MAE, RMSE, and MAPE
+    Compute MAE and RMSE
     
     Args:
         preds: [batch_size, pred_len, num_nodes] or [batch_size, num_nodes, pred_len]
@@ -66,12 +49,10 @@ def compute_all_metrics(preds, labels, null_val=np.nan):
     """
     mae = masked_mae(preds, labels, null_val).item()
     rmse = masked_rmse(preds, labels, null_val).item()
-    mape = masked_mape(preds, labels, null_val).item()
-    
+
     return {
         'mae': mae,
         'rmse': rmse,
-        'mape': mape
     }
 
 

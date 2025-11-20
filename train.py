@@ -158,8 +158,8 @@ def main(args):
         
         val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler)
         val_mae = val_metrics['overall']['mae']
-        
-        print(f"Val MAE: {val_mae:.4f}, RMSE: {val_metrics['overall']['rmse']:.4f}, MAPE: {val_metrics['overall']['mape']:.2f}%")
+
+        print(f"Val MAE: {val_mae:.4f}, RMSE: {val_metrics['overall']['rmse']:.4f}")
         print(f"  Horizon 3 (15min):  MAE={val_metrics['horizon_3']['mae']:.4f}")
         print(f"  Horizon 6 (30min):  MAE={val_metrics['horizon_6']['mae']:.4f}")
         print(f"  Horizon 12 (60min): MAE={val_metrics['horizon_12']['mae']:.4f}")
@@ -197,10 +197,10 @@ def main(args):
     test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler)
     
     print("\nTest Results:")
-    print(f"Overall - MAE: {test_metrics['overall']['mae']:.4f}, RMSE: {test_metrics['overall']['rmse']:.4f}, MAPE: {test_metrics['overall']['mape']:.2f}%")
-    print(f"Horizon 3 (15min)  - MAE: {test_metrics['horizon_3']['mae']:.4f}, RMSE: {test_metrics['horizon_3']['rmse']:.4f}, MAPE: {test_metrics['horizon_3']['mape']:.2f}%")
-    print(f"Horizon 6 (30min)  - MAE: {test_metrics['horizon_6']['mae']:.4f}, RMSE: {test_metrics['horizon_6']['rmse']:.4f}, MAPE: {test_metrics['horizon_6']['mape']:.2f}%")
-    print(f"Horizon 12 (60min) - MAE: {test_metrics['horizon_12']['mae']:.4f}, RMSE: {test_metrics['horizon_12']['rmse']:.4f}, MAPE: {test_metrics['horizon_12']['mape']:.2f}%")
+    print(f"Overall - MAE: {test_metrics['overall']['mae']:.4f}, RMSE: {test_metrics['overall']['rmse']:.4f}")
+    print(f"Horizon 3 (15min)  - MAE: {test_metrics['horizon_3']['mae']:.4f}, RMSE: {test_metrics['horizon_3']['rmse']:.4f}")
+    print(f"Horizon 6 (30min)  - MAE: {test_metrics['horizon_6']['mae']:.4f}, RMSE: {test_metrics['horizon_6']['rmse']:.4f}")
+    print(f"Horizon 12 (60min) - MAE: {test_metrics['horizon_12']['mae']:.4f}, RMSE: {test_metrics['horizon_12']['rmse']:.4f}")
     
     results['test_metrics'] = test_metrics
     
