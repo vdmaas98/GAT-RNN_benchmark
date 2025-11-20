@@ -128,7 +128,7 @@ def main(args):
     
     criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=args.patience, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=args.patience)
     
     best_val_mae = float('inf')
     patience_counter = 0
