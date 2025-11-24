@@ -71,8 +71,15 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     data = data[:max_timesteps]
     
     num_nodes = data.shape[1]
-
-    scaler = StandardScaler(mean=data.mean(), std=data.std())
+    
+    num_samples = data.shape[0]
+    num_train = int(num_samples * 0.7)
+    train_speed = data[:num_train]
+    train_mean = train_speed.mean()
+    train_std = train_speed.std()
+    if train_std <= 1e-6:
+        train_std = 1.0
+    scaler = StandardScaler(mean=train_mean, std=train_std)
     data = scaler.transform(data)
     
     with open(adj_path, 'rb') as f:
