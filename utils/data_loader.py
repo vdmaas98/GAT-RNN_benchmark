@@ -66,9 +66,7 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     
     df = pd.read_hdf(data_path)
     data = df.values
-
-    max_timesteps = 20000
-    data = data[:max_timesteps]
+    
     
     num_nodes = data.shape[1]
     
@@ -101,9 +99,11 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     val_dataset = METRLA_Dataset(data, edge_index, edge_attr, seq_len, pred_len, 'val')
     test_dataset = METRLA_Dataset(data, edge_index, edge_attr, seq_len, pred_len, 'test')
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    workers = min(8, os.cpu_count() or 2)
+    pin = torch.cuda.is_available()
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=pin, persistent_workers=True, prefetch_factor=4)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=workers, pin_memory=pin, persistent_workers=True, prefetch_factor=4)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=workers, pin_memory=pin, persistent_workers=True, prefetch_factor=4)
     
     return train_loader, val_loader, test_loader, edge_index, edge_attr, scaler
 

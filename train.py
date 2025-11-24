@@ -7,31 +7,39 @@ import argparse
 import os
 from tqdm import tqdm
 import json
+from contextlib import nullcontext
 
 from models import GATLSTM, GATGRU, PlainLSTM
 from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler):
+def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None):
     model.train()
     total_loss = 0
     num_batches = 0
     
+    autocast_ctx = torch.autocast(device_type='cuda', dtype=amp_dtype) if use_amp else nullcontext()
     for x, y in tqdm(train_loader, desc="Training"):
-        x = x.to(device)
-        y = y.to(device)
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
         
         optimizer.zero_grad()
         
-        out = model(x, edge_index, edge_attr)
+        with autocast_ctx:
+            out = model(x, edge_index, edge_attr)
+            y_pred = out.transpose(1, 2)
+            loss = criterion(y_pred, y)
         
-        y_pred = out.transpose(1, 2)
-        
-        loss = criterion(y_pred, y)
-        
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-        optimizer.step()
+        if grad_scaler is not None:
+            grad_scaler.scale(loss).backward()
+            grad_scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            optimizer.step()
         
         total_loss += loss.item()
         num_batches += 1
@@ -39,22 +47,23 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
     return total_loss / num_batches
 
 
-def evaluate(model, data_loader, device, edge_index, edge_attr, scaler):
+def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16):
     model.eval()
     all_preds = []
     all_labels = []
     
     with torch.no_grad():
+        autocast_ctx = torch.autocast(device_type='cuda', dtype=amp_dtype) if use_amp else nullcontext()
         for x, y in tqdm(data_loader, desc="Evaluating"):
-            x = x.to(device)
-            y = y.to(device)
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
             
-            out = model(x, edge_index, edge_attr)
+            with autocast_ctx:
+                out = model(x, edge_index, edge_attr)
+                y_pred = out.transpose(1, 2)
             
-            y_pred = out.transpose(1, 2)
-            
-            y_pred_rescaled = scaler.inverse_transform(y_pred.cpu().numpy())
-            y_rescaled = scaler.inverse_transform(y.cpu().numpy())
+            y_pred_rescaled = scaler.inverse_transform(y_pred.detach().cpu().numpy())
+            y_rescaled = scaler.inverse_transform(y.detach().cpu().numpy())
             
             all_preds.append(y_pred_rescaled)
             all_labels.append(y_rescaled)
@@ -76,6 +85,21 @@ def main(args):
     
     device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() and args.gpu >= 0 else 'cpu')
     print(f"Using device: {device}")
+    if device.type == 'cuda':
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            # Prefer bf16 on Ampere+ if available
+            bf16_ok = hasattr(torch.cuda, 'is_bf16_supported') and torch.cuda.is_bf16_supported()
+        except Exception:
+            bf16_ok = False
+        use_amp = True
+        amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
+        grad_scaler = None if bf16_ok else torch.cuda.amp.GradScaler()
+    else:
+        use_amp = False
+        amp_dtype = torch.float16
+        grad_scaler = None
     
     print("Loading METR-LA dataset...")
     train_loader, val_loader, test_loader, edge_index, edge_attr, scaler = load_metr_la(
@@ -135,7 +159,10 @@ def main(args):
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     criterion = nn.L1Loss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    try:
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, fused=True)
+    except TypeError:
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=args.patience)
     
     best_val_mae = float('inf')
@@ -153,10 +180,10 @@ def main(args):
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler)
         print(f"Train Loss: {train_loss:.4f}")
         
-        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler)
+        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype)
         val_mae = val_metrics['overall']['mae']
 
         print(f"Val MAE: {val_mae:.4f}, RMSE: {val_metrics['overall']['rmse']:.4f}")
