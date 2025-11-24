@@ -67,7 +67,7 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     df = pd.read_hdf(data_path)
     data = df.values
 
-    max_timesteps = 10000
+    max_timesteps = 20000
     data = data[:max_timesteps]
     
     num_nodes = data.shape[1]
