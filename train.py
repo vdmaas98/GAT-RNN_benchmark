@@ -13,7 +13,7 @@ from models import GATLSTM, GATGRU, PlainLSTM
 from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None):
+def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None, vectorize_batch=False):
     model.train()
     total_loss = 0
     num_batches = 0
@@ -26,7 +26,20 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
         optimizer.zero_grad()
         
         with autocast_ctx:
-            out = model(x, edge_index, edge_attr)
+            if vectorize_batch:
+                B, S, N, F = x.shape
+                x_b = x.reshape(1, S, B * N, F)
+                E = edge_index.shape[1]
+                offsets = (torch.arange(B, device=edge_index.device)
+                           .repeat_interleave(E) * N)
+                ei_rep = edge_index.repeat(1, B).clone()
+                ei_rep[0] = ei_rep[0] + offsets
+                ei_rep[1] = ei_rep[1] + offsets
+                ea_rep = edge_attr.repeat(B, 1)
+                out_tmp = model(x_b, ei_rep, ea_rep)
+                out = out_tmp.view(B, N, -1)
+            else:
+                out = model(x, edge_index, edge_attr)
             y_pred = out.transpose(1, 2)
             loss = criterion(y_pred, y)
         
@@ -47,7 +60,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
     return total_loss / num_batches
 
 
-def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16):
+def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, vectorize_batch=False):
     model.eval()
     all_preds = []
     all_labels = []
@@ -59,7 +72,20 @@ def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=
             y = y.to(device, non_blocking=True)
             
             with autocast_ctx:
-                out = model(x, edge_index, edge_attr)
+                if vectorize_batch:
+                    B, S, N, F = x.shape
+                    x_b = x.reshape(1, S, B * N, F)
+                    E = edge_index.shape[1]
+                    offsets = (torch.arange(B, device=edge_index.device)
+                               .repeat_interleave(E) * N)
+                    ei_rep = edge_index.repeat(1, B).clone()
+                    ei_rep[0] = ei_rep[0] + offsets
+                    ei_rep[1] = ei_rep[1] + offsets
+                    ea_rep = edge_attr.repeat(B, 1)
+                    out_tmp = model(x_b, ei_rep, ea_rep)
+                    out = out_tmp.view(B, N, -1)
+                else:
+                    out = model(x, edge_index, edge_attr)
                 y_pred = out.transpose(1, 2)
             
             y_pred_rescaled = scaler.inverse_transform(y_pred.detach().cpu().numpy())
@@ -180,10 +206,10 @@ def main(args):
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler, vectorize_batch=args.vectorize_batch)
         print(f"Train Loss: {train_loss:.4f}")
         
-        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype)
+        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, vectorize_batch=args.vectorize_batch)
         val_mae = val_metrics['overall']['mae']
 
         print(f"Val MAE: {val_mae:.4f}, RMSE: {val_metrics['overall']['rmse']:.4f}")
@@ -221,7 +247,7 @@ def main(args):
     checkpoint = torch.load(os.path.join(args.save_dir, f'best_{args.model}_metrla.pth'))
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler)
+    test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, vectorize_batch=args.vectorize_batch)
     
     print("\nTest Results:")
     print(f"Overall - MAE: {test_metrics['overall']['mae']:.4f}, RMSE: {test_metrics['overall']['rmse']:.4f}")
@@ -278,6 +304,8 @@ if __name__ == '__main__':
                         help='GPU device ID (-1 for CPU)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
+    parser.add_argument('--vectorize_batch', action='store_true',
+                        help='Vectorize batch by packing B graphs into a single disjoint union for faster training')
     
     args = parser.parse_args()
     main(args)
