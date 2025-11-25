@@ -31,14 +31,14 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
                 B, S, N, F = x.shape
                 x_b = x.reshape(1, S, B * N, F)
                 E = edge_index.shape[1]
-                offsets = (torch.arange(B, device=edge_index.device)
-                           .repeat_interleave(E) * N)
-                ei_rep = edge_index.repeat(1, B).clone()
-                ei_rep[0] = ei_rep[0] + offsets
-                ei_rep[1] = ei_rep[1] + offsets
-                ea_rep = edge_attr.repeat(B, 1)
+                # Build replicated edges with explicit batch offsets to guarantee ordering
+                offset = (torch.arange(B, device=edge_index.device, dtype=edge_index.dtype) * N).view(B, 1, 1)
+                ei = edge_index.unsqueeze(0).repeat(B, 1, 1)  # [B, 2, E]
+                ei = ei + offset  # add to both rows via broadcast
+                ei_rep = ei.permute(1, 0, 2).reshape(2, B * E).contiguous()
+                ea_rep = edge_attr.unsqueeze(0).repeat(B, 1, 1).reshape(B * E, -1).contiguous()
                 out_tmp = model(x_b, ei_rep, ea_rep)
-                out = out_tmp.view(B, N, -1)
+                out = out_tmp.reshape(B, N, -1).contiguous()
             else:
                 out = model(x, edge_index, edge_attr)
             y_pred = out.transpose(1, 2)
@@ -77,14 +77,13 @@ def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=
                     B, S, N, F = x.shape
                     x_b = x.reshape(1, S, B * N, F)
                     E = edge_index.shape[1]
-                    offsets = (torch.arange(B, device=edge_index.device)
-                               .repeat_interleave(E) * N)
-                    ei_rep = edge_index.repeat(1, B).clone()
-                    ei_rep[0] = ei_rep[0] + offsets
-                    ei_rep[1] = ei_rep[1] + offsets
-                    ea_rep = edge_attr.repeat(B, 1)
+                    offset = (torch.arange(B, device=edge_index.device, dtype=edge_index.dtype) * N).view(B, 1, 1)
+                    ei = edge_index.unsqueeze(0).repeat(B, 1, 1)  # [B, 2, E]
+                    ei = ei + offset
+                    ei_rep = ei.permute(1, 0, 2).reshape(2, B * E).contiguous()
+                    ea_rep = edge_attr.unsqueeze(0).repeat(B, 1, 1).reshape(B * E, -1).contiguous()
                     out_tmp = model(x_b, ei_rep, ea_rep)
-                    out = out_tmp.view(B, N, -1)
+                    out = out_tmp.reshape(B, N, -1).contiguous()
                 else:
                     out = model(x, edge_index, edge_attr)
                 y_pred = out.transpose(1, 2)
