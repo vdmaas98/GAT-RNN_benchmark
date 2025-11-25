@@ -7,6 +7,7 @@ import argparse
 import os
 from tqdm import tqdm
 import json
+import sys
 from contextlib import nullcontext
 
 from models import GATLSTM, GATGRU, PlainLSTM
@@ -202,6 +203,39 @@ def main(args):
         'val_metrics': [],
         'best_epoch': 0
     }
+    
+    # Optional debug: compare vectorized vs non-vectorized on a single batch and exit
+    if getattr(args, 'debug_compare_vec', False):
+        model.eval()
+        with torch.no_grad():
+            xb, yb = next(iter(val_loader)) if len(val_loader) > 0 else next(iter(train_loader))
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
+            # Non-vectorized
+            out_ref = model(xb, edge_index, edge_attr)
+            ypred_ref = out_ref.transpose(1, 2).float()
+            loss_ref = criterion(ypred_ref, yb.float()).item()
+            # Vectorized packing
+            B, S, N, F = xb.shape
+            E = edge_index.shape[1]
+            x_pack = xb.reshape(1, S, B * N, F)
+            offsets = (torch.arange(B, device=edge_index.device)
+                       .repeat_interleave(E) * N)
+            ei_rep = edge_index.repeat(1, B).clone()
+            ei_rep[0] = ei_rep[0] + offsets
+            ei_rep[1] = ei_rep[1] + offsets
+            ea_rep = edge_attr.repeat(B, 1)
+            out_vec = model(x_pack, ei_rep, ea_rep)
+            out_vec = out_vec.view(B, N, -1)
+            ypred_vec = out_vec.transpose(1, 2).float()
+            loss_vec = criterion(ypred_vec, yb.float()).item()
+            max_abs_diff = (ypred_vec - ypred_ref).abs().max().item()
+        print("\n[Debug] Vectorization equivalence check:")
+        print(f"  loss_ref: {loss_ref:.6f}")
+        print(f"  loss_vec: {loss_vec:.6f}")
+        print(f"  max|pred_vec - pred_ref|: {max_abs_diff:.6e}")
+        print("Exiting after debug_compare_vec.")
+        sys.exit(0)
     
     print("\nStarting training...")
     for epoch in range(1, args.epochs + 1):
