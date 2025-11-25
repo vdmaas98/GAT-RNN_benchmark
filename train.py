@@ -119,9 +119,9 @@ def main(args):
             bf16_ok = hasattr(torch.cuda, 'is_bf16_supported') and torch.cuda.is_bf16_supported()
         except Exception:
             bf16_ok = False
-        use_amp = True
+        use_amp = not getattr(args, 'no_amp', False)
         amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
-        grad_scaler = None if bf16_ok else torch.cuda.amp.GradScaler()
+        grad_scaler = None if (bf16_ok or not use_amp) else torch.cuda.amp.GradScaler()
     else:
         use_amp = False
         amp_dtype = torch.float16
@@ -132,7 +132,8 @@ def main(args):
         data_dir=args.data_dir,
         seq_len=args.seq_len,
         pred_len=args.pred_len,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        max_timesteps=args.max_timesteps
     )
     
     edge_index = edge_index.to(device)
@@ -307,5 +308,9 @@ if __name__ == '__main__':
     parser.add_argument('--vectorize_batch', action='store_true',
                         help='Vectorize batch by packing B graphs into a single disjoint union for faster training')
     
+    parser.add_argument('--no_amp', action='store_true',
+                        help='Disable autocast mixed precision (use full precision)')
+    parser.add_argument('--max_timesteps', type=int, default=None,
+                        help='Limit dataset to first T timesteps if provided')
     args = parser.parse_args()
     main(args)
