@@ -7,14 +7,13 @@ import argparse
 import os
 from tqdm import tqdm
 import json
-import sys
 from contextlib import nullcontext
 
 from models import GATLSTM, GATGRU, PlainLSTM
 from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None, vectorize_batch=False):
+def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None):
     model.train()
     total_loss = 0
     num_batches = 0
@@ -27,20 +26,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
         optimizer.zero_grad()
         
         with autocast_ctx:
-            if vectorize_batch:
-                B, S, N, F = x.shape
-                x_b = x.reshape(1, S, B * N, F)
-                E = edge_index.shape[1]
-                # Build replicated edges with explicit batch offsets to guarantee ordering
-                offset = (torch.arange(B, device=edge_index.device, dtype=edge_index.dtype) * N).view(B, 1, 1)
-                ei = edge_index.unsqueeze(0).repeat(B, 1, 1)  # [B, 2, E]
-                ei = ei + offset  # add to both rows via broadcast
-                ei_rep = ei.permute(1, 0, 2).reshape(2, B * E).contiguous()
-                ea_rep = edge_attr.unsqueeze(0).repeat(B, 1, 1).reshape(B * E, -1).contiguous()
-                out_tmp = model(x_b, ei_rep, ea_rep)
-                out = out_tmp.reshape(B, N, -1).contiguous()
-            else:
-                out = model(x, edge_index, edge_attr)
+            out = model(x, edge_index, edge_attr)
             y_pred = out.transpose(1, 2)
             loss = criterion(y_pred, y)
         
@@ -61,7 +47,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
     return total_loss / num_batches
 
 
-def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, vectorize_batch=False):
+def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16):
     model.eval()
     all_preds = []
     all_labels = []
@@ -73,23 +59,11 @@ def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=
             y = y.to(device, non_blocking=True)
             
             with autocast_ctx:
-                if vectorize_batch:
-                    B, S, N, F = x.shape
-                    x_b = x.reshape(1, S, B * N, F)
-                    E = edge_index.shape[1]
-                    offset = (torch.arange(B, device=edge_index.device, dtype=edge_index.dtype) * N).view(B, 1, 1)
-                    ei = edge_index.unsqueeze(0).repeat(B, 1, 1)  # [B, 2, E]
-                    ei = ei + offset
-                    ei_rep = ei.permute(1, 0, 2).reshape(2, B * E).contiguous()
-                    ea_rep = edge_attr.unsqueeze(0).repeat(B, 1, 1).reshape(B * E, -1).contiguous()
-                    out_tmp = model(x_b, ei_rep, ea_rep)
-                    out = out_tmp.reshape(B, N, -1).contiguous()
-                else:
-                    out = model(x, edge_index, edge_attr)
+                out = model(x, edge_index, edge_attr)
                 y_pred = out.transpose(1, 2)
             
-            y_pred_rescaled = scaler.inverse_transform(y_pred.detach().float().cpu().numpy())
-            y_rescaled = scaler.inverse_transform(y.detach().float().cpu().numpy())
+            y_pred_rescaled = scaler.inverse_transform(y_pred.detach().cpu().numpy())
+            y_rescaled = scaler.inverse_transform(y.detach().cpu().numpy())
             
             all_preds.append(y_pred_rescaled)
             all_labels.append(y_rescaled)
@@ -119,9 +93,9 @@ def main(args):
             bf16_ok = hasattr(torch.cuda, 'is_bf16_supported') and torch.cuda.is_bf16_supported()
         except Exception:
             bf16_ok = False
-        use_amp = not getattr(args, 'no_amp', False)
+        use_amp = True
         amp_dtype = torch.bfloat16 if bf16_ok else torch.float16
-        grad_scaler = None if (bf16_ok or not use_amp) else torch.cuda.amp.GradScaler()
+        grad_scaler = None if bf16_ok else torch.cuda.amp.GradScaler()
     else:
         use_amp = False
         amp_dtype = torch.float16
@@ -132,8 +106,7 @@ def main(args):
         data_dir=args.data_dir,
         seq_len=args.seq_len,
         pred_len=args.pred_len,
-        batch_size=args.batch_size,
-        max_timesteps=args.max_timesteps
+        batch_size=args.batch_size
     )
     
     edge_index = edge_index.to(device)
@@ -203,47 +176,14 @@ def main(args):
         'best_epoch': 0
     }
     
-    # Optional debug: compare vectorized vs non-vectorized on a single batch and exit
-    if getattr(args, 'debug_compare_vec', False):
-        model.eval()
-        with torch.no_grad():
-            xb, yb = next(iter(val_loader)) if len(val_loader) > 0 else next(iter(train_loader))
-            xb = xb.to(device, non_blocking=True)
-            yb = yb.to(device, non_blocking=True)
-            # Non-vectorized
-            out_ref = model(xb, edge_index, edge_attr)
-            ypred_ref = out_ref.transpose(1, 2).float()
-            loss_ref = criterion(ypred_ref, yb.float()).item()
-            # Vectorized packing
-            B, S, N, F = xb.shape
-            E = edge_index.shape[1]
-            x_pack = xb.reshape(1, S, B * N, F)
-            offsets = (torch.arange(B, device=edge_index.device)
-                       .repeat_interleave(E) * N)
-            ei_rep = edge_index.repeat(1, B).clone()
-            ei_rep[0] = ei_rep[0] + offsets
-            ei_rep[1] = ei_rep[1] + offsets
-            ea_rep = edge_attr.repeat(B, 1)
-            out_vec = model(x_pack, ei_rep, ea_rep)
-            out_vec = out_vec.view(B, N, -1)
-            ypred_vec = out_vec.transpose(1, 2).float()
-            loss_vec = criterion(ypred_vec, yb.float()).item()
-            max_abs_diff = (ypred_vec - ypred_ref).abs().max().item()
-        print("\n[Debug] Vectorization equivalence check:")
-        print(f"  loss_ref: {loss_ref:.6f}")
-        print(f"  loss_vec: {loss_vec:.6f}")
-        print(f"  max|pred_vec - pred_ref|: {max_abs_diff:.6e}")
-        print("Exiting after debug_compare_vec.")
-        sys.exit(0)
-    
     print("\nStarting training...")
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler, vectorize_batch=args.vectorize_batch)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler)
         print(f"Train Loss: {train_loss:.4f}")
         
-        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, vectorize_batch=args.vectorize_batch)
+        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype)
         val_mae = val_metrics['overall']['mae']
 
         print(f"Val MAE: {val_mae:.4f}, RMSE: {val_metrics['overall']['rmse']:.4f}")
@@ -281,7 +221,7 @@ def main(args):
     checkpoint = torch.load(os.path.join(args.save_dir, f'best_{args.model}_metrla.pth'))
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, vectorize_batch=args.vectorize_batch)
+    test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler)
     
     print("\nTest Results:")
     print(f"Overall - MAE: {test_metrics['overall']['mae']:.4f}, RMSE: {test_metrics['overall']['rmse']:.4f}")
@@ -338,14 +278,6 @@ if __name__ == '__main__':
                         help='GPU device ID (-1 for CPU)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
-    parser.add_argument('--vectorize_batch', action='store_true',
-                        help='Vectorize batch by packing B graphs into a single disjoint union for faster training')
     
-    parser.add_argument('--no_amp', action='store_true',
-                        help='Disable autocast mixed precision (use full precision)')
-    parser.add_argument('--max_timesteps', type=int, default=None,
-                        help='Limit dataset to first T timesteps if provided')
-    parser.add_argument('--debug_compare_vec', action='store_true',
-                        help='Run a single-batch equivalence check between vectorized and non-vectorized paths and exit')
     args = parser.parse_args()
     main(args)
