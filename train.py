@@ -346,5 +346,7 @@ if __name__ == '__main__':
                         help='Disable autocast mixed precision (use full precision)')
     parser.add_argument('--max_timesteps', type=int, default=None,
                         help='Limit dataset to first T timesteps if provided')
+    parser.add_argument('--debug_compare_vec', action='store_true',
+                        help='Run a single-batch equivalence check between vectorized and non-vectorized paths and exit')
     args = parser.parse_args()
     main(args)
