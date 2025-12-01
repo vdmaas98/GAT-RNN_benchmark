@@ -106,7 +106,8 @@ def main(args):
         data_dir=args.data_dir,
         seq_len=args.seq_len,
         pred_len=args.pred_len,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        max_timesteps=args.max_timesteps
     )
     
     edge_index = edge_index.to(device)
@@ -133,7 +134,8 @@ def main(args):
             hidden_dim=args.hidden_dim,
             output_dim=args.pred_len,
             heads=args.heads,
-            dropout=args.dropout
+            dropout=args.dropout,
+            num_nodes=num_nodes
         ).to(device)
     elif args.model == 'gatgru':
         model = GATGRU(
@@ -273,6 +275,8 @@ if __name__ == '__main__':
                         help='Patience for learning rate scheduler')
     parser.add_argument('--early_stop', type=int, default=15,
                         help='Patience for early stopping')
+    parser.add_argument('--max_timesteps', type=int, default=None,
+                        help='Optional limit on number of time steps to load (useful for quicker runs)')
     
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU device ID (-1 for CPU)')

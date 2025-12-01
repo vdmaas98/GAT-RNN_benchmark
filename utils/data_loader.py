@@ -48,7 +48,7 @@ class METRLA_Dataset(Dataset):
         return x, y
 
 
-def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
+def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64, max_timesteps=None):
     """
     Load METR-LA dataset
     
@@ -66,6 +66,8 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64):
     
     df = pd.read_hdf(data_path)
     data = df.values
+    if max_timesteps is not None:
+        data = data[:max_timesteps]
     
     
     num_nodes = data.shape[1]
