@@ -62,8 +62,8 @@ def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=
                 out = model(x, edge_index, edge_attr)
                 y_pred = out.transpose(1, 2)
             
-            y_pred_rescaled = scaler.inverse_transform(y_pred.detach().cpu().numpy())
-            y_rescaled = scaler.inverse_transform(y.detach().cpu().numpy())
+            y_pred_rescaled = scaler.inverse_transform(y_pred.detach().float().cpu().numpy())
+            y_rescaled = scaler.inverse_transform(y.detach().float().cpu().numpy())
             
             all_preds.append(y_pred_rescaled)
             all_labels.append(y_rescaled)
