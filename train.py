@@ -135,7 +135,12 @@ def main(args):
             output_dim=args.pred_len,
             heads=args.heads,
             dropout=args.dropout,
-            num_nodes=num_nodes
+            num_nodes=num_nodes,
+            use_per_node_init=args.use_per_node_init,
+            use_temporal_attention=args.use_temporal_attention,
+            use_skip_connection=args.use_skip_connection,
+            use_edge_mlp=args.use_edge_mlp,
+            vectorized=args.vectorized
         ).to(device)
     elif args.model == 'gatgru':
         model = GATGRU(
@@ -282,6 +287,16 @@ if __name__ == '__main__':
                         help='GPU device ID (-1 for CPU)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
+    parser.add_argument('--use_per_node_init', action='store_true',
+                        help='Use per-node learnable h0/c0 initial states')
+    parser.add_argument('--use_temporal_attention', action='store_true',
+                        help='Use temporal attention readout over hidden states')
+    parser.add_argument('--use_skip_connection', action='store_true',
+                        help='Add input→output skip from last frame')
+    parser.add_argument('--use_edge_mlp', action='store_true',
+                        help='Apply tiny MLP to edge_attr before GAT')
+    parser.add_argument('--vectorized', action='store_true',
+                        help='Enable batch-parallel vectorized GAT-LSTM over disjoint union graph')
     
     args = parser.parse_args()
     main(args)
