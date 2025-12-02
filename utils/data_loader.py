@@ -74,11 +74,10 @@ def load_metr_la(data_dir, seq_len=12, pred_len=12, batch_size=64, max_timesteps
     
     num_samples = data.shape[0]
     num_train = int(num_samples * 0.7)
-    train_speed = data[:num_train]
-    train_mean = train_speed.mean()
-    train_std = train_speed.std()
-    if train_std <= 1e-6:
-        train_std = 1.0
+    train_speed = data[:num_train]  # [T_train, N]
+    train_mean = train_speed.mean(axis=0)  # per-node means [N]
+    train_std = train_speed.std(axis=0)    # per-node stds  [N]
+    train_std[train_std <= 1e-6] = 1.0
     scaler = StandardScaler(mean=train_mean, std=train_std)
     data = scaler.transform(data)
     
@@ -142,11 +141,23 @@ def adj_matrix_to_edge_index(adj_mx, threshold=0.1):
 
 class StandardScaler:
     def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
+        self.mean = np.asarray(mean)
+        self.std = np.asarray(std)
     
     def transform(self, data):
-        return (data - self.mean) / self.std
+        data = np.asarray(data)
+        if data.ndim == 2:  # [T, N]
+            return (data - self.mean[None, :]) / self.std[None, :]
+        elif data.ndim == 3:  # [B, L, N]
+            return (data - self.mean[None, None, :]) / self.std[None, None, :]
+        else:
+            return (data - self.mean) / self.std
     
     def inverse_transform(self, data):
-        return data * self.std + self.mean
+        data = np.asarray(data)
+        if data.ndim == 2:  # [T, N]
+            return data * self.std[None, :] + self.mean[None, :]
+        elif data.ndim == 3:  # [B, L, N]
+            return data * self.std[None, None, :] + self.mean[None, None, :]
+        else:
+            return data * self.std + self.mean

@@ -10,7 +10,7 @@ import json
 from contextlib import nullcontext
 
 from models import GATLSTM, GATGRU, PlainLSTM
-from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon
+from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon, masked_mae
 
 
 def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None):
@@ -47,7 +47,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
     return total_loss / num_batches
 
 
-def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16):
+def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, null_val=0.0):
     model.eval()
     all_preds = []
     all_labels = []
@@ -74,7 +74,7 @@ def evaluate(model, data_loader, device, edge_index, edge_attr, scaler, use_amp=
     all_preds = torch.FloatTensor(all_preds)
     all_labels = torch.FloatTensor(all_labels)
     
-    metrics = compute_metrics_per_horizon(all_preds, all_labels, horizons=[3, 6, 12])
+    metrics = compute_metrics_per_horizon(all_preds, all_labels, horizons=[3, 6, 12], null_val=null_val)
     
     return metrics
 
@@ -145,7 +145,8 @@ def main(args):
             use_temporal_attention=args.use_temporal_attention,
             use_skip_connection=args.use_skip_connection,
             use_edge_mlp=args.use_edge_mlp,
-            vectorized=args.vectorized
+            vectorized=args.vectorized,
+            use_horizon_embeddings=args.use_horizon_embeddings
         ).to(device)
     elif args.model == 'gatgru':
         model = GATGRU(
@@ -170,7 +171,7 @@ def main(args):
     print(f"\nModel: {args.model.upper()}")
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
-    criterion = nn.L1Loss()
+    criterion = lambda y_pred, y: masked_mae(y_pred, y, null_val=args.null_val)
     try:
         optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, fused=True)
     except TypeError:
@@ -195,7 +196,7 @@ def main(args):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler)
         print(f"Train Loss: {train_loss:.4f}")
         
-        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype)
+        val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, null_val=args.null_val)
         val_mae = val_metrics['overall']['mae']
 
         print(f"Val MAE: {val_mae:.4f}, RMSE: {val_metrics['overall']['rmse']:.4f}")
@@ -233,7 +234,7 @@ def main(args):
     checkpoint = torch.load(os.path.join(args.save_dir, f'best_{args.model}_metrla.pth'))
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler)
+    test_metrics = evaluate(model, test_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, null_val=args.null_val)
     
     print("\nTest Results:")
     print(f"Overall - MAE: {test_metrics['overall']['mae']:.4f}, RMSE: {test_metrics['overall']['rmse']:.4f}")
@@ -292,6 +293,8 @@ if __name__ == '__main__':
                         help='GPU device ID (-1 for CPU)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
+    parser.add_argument('--null_val', type=float, default=0.0,
+                        help='Mask value for missing readings (e.g., 0.0 for METR-LA)')
     parser.add_argument('--use_per_node_init', action='store_true',
                         help='Use per-node learnable h0/c0 initial states')
     parser.add_argument('--use_temporal_attention', action='store_true',
@@ -302,6 +305,8 @@ if __name__ == '__main__':
                         help='Apply tiny MLP to edge_attr before GAT')
     parser.add_argument('--vectorized', action='store_true',
                         help='Enable batch-parallel vectorized GAT-LSTM over disjoint union graph')
+    parser.add_argument('--use_horizon_embeddings', action='store_true',
+                        help='Use horizon embeddings to condition readout per horizon')
     
     args = parser.parse_args()
     main(args)

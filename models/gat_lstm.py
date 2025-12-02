@@ -59,7 +59,7 @@ class GATLSTMCell(nn.Module):
 class GATLSTM(nn.Module):
     def __init__(self, node_feat_dim, edge_feat_dim, hidden_dim, output_dim=12, heads=2, dropout=0.3, num_nodes=None,
                  use_per_node_init=False, use_temporal_attention=False, use_skip_connection=False, use_edge_mlp=False,
-                 vectorized=False):
+                 vectorized=False, use_horizon_embeddings=False):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
@@ -68,6 +68,7 @@ class GATLSTM(nn.Module):
         self.use_temporal_attention = use_temporal_attention
         self.use_skip_connection = use_skip_connection
         self.vectorized = vectorized
+        self.use_horizon_embeddings = use_horizon_embeddings
 
         self.cell = GATLSTMCell(
             in_channels=node_feat_dim,
@@ -89,12 +90,21 @@ class GATLSTM(nn.Module):
             self.attn_k = nn.Linear(hidden_dim, hidden_dim)
             self.attn_v = nn.Linear(hidden_dim, hidden_dim)
 
-        self.output = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        if self.use_horizon_embeddings:
+            self.horizon_emb = nn.Embedding(output_dim, hidden_dim)
+            self.output_per_step = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1)
+            )
+        else:
+            self.output = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, output_dim)
+            )
         if self.use_skip_connection:
             self.skip = nn.Linear(node_feat_dim, output_dim)
 
@@ -145,11 +155,16 @@ class GATLSTM(nn.Module):
                 else:
                     h_agg = h
 
-                if self.use_skip_connection:
-                    x_last = x_seq[b, -1]
-                    out_b = self.output(h_agg) + self.skip(x_last)
+                if self.use_horizon_embeddings:
+                    idx = torch.arange(self.output_dim, device=device)
+                    e = self.horizon_emb(idx)
+                    Hn = h_agg.unsqueeze(1) + e.unsqueeze(0)
+                    out_b = self.output_per_step(Hn).squeeze(-1)
                 else:
                     out_b = self.output(h_agg)
+                if self.use_skip_connection:
+                    x_last = x_seq[b, -1]
+                    out_b = out_b + self.skip(x_last)
                 all_outputs.append(out_b)
                 if return_attn:
                     all_attn_weights.append(batch_attn_weights)
@@ -191,11 +206,17 @@ class GATLSTM(nn.Module):
             else:
                 h_agg = h
 
-            if self.use_skip_connection:
-                x_last = x_seq[:, -1].reshape(B * N, -1)
-                out = self.output(h_agg) + self.skip(x_last)
+            if self.use_horizon_embeddings:
+                idx = torch.arange(self.output_dim, device=device)
+                e = self.horizon_emb(idx)
+                Hbn = h_agg.view(B, N, -1)
+                Hbn = Hbn.unsqueeze(2) + e.view(1, 1, self.output_dim, -1)
+                out = self.output_per_step(Hbn).squeeze(-1)
             else:
                 out = self.output(h_agg)
+            if self.use_skip_connection:
+                x_last = x_seq[:, -1].reshape(B, N, -1)
+                out = out + self.skip(x_last)
             out = out.view(B, N, self.output_dim)
             all_outputs = out
 
