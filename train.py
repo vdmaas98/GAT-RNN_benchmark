@@ -9,11 +9,11 @@ from tqdm import tqdm
 import json
 from contextlib import nullcontext
 
-from models import GATLSTM, GATGRU, PlainLSTM
+from models import GATLSTM, GATGRU, PlainLSTM, GATLSTMSeq2Seq
 from utils import load_metr_la, compute_all_metrics, compute_metrics_per_horizon, masked_mae
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None):
+def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=False, amp_dtype=torch.float16, grad_scaler=None, seq2seq=False, teacher_forcing_ratio=0.0):
     model.train()
     total_loss = 0
     num_batches = 0
@@ -26,7 +26,10 @@ def train_epoch(model, train_loader, optimizer, criterion, device, edge_index, e
         optimizer.zero_grad()
         
         with autocast_ctx:
-            out = model(x, edge_index, edge_attr)
+            if seq2seq:
+                out = model(x, edge_index, edge_attr, y_seq=y, teacher_forcing_ratio=teacher_forcing_ratio)
+            else:
+                out = model(x, edge_index, edge_attr)
             y_pred = out.transpose(1, 2)
             loss = criterion(y_pred, y)
         
@@ -132,8 +135,24 @@ def main(args):
     print(f"  Val samples: {len(val_loader.dataset)}")
     print(f"  Test samples: {len(test_loader.dataset)}")
     
-    if args.model == 'gatlstm':
+    if args.model == 'gatlstm' and not args.seq2seq:
         model = GATLSTM(
+            node_feat_dim=node_feat_dim,
+            edge_feat_dim=edge_feat_dim,
+            hidden_dim=args.hidden_dim,
+            output_dim=args.pred_len,
+            heads=args.heads,
+            dropout=args.dropout,
+            num_nodes=num_nodes,
+            use_per_node_init=args.use_per_node_init,
+            use_temporal_attention=args.use_temporal_attention,
+            use_skip_connection=args.use_skip_connection,
+            use_edge_mlp=args.use_edge_mlp,
+            vectorized=args.vectorized,
+            use_horizon_embeddings=args.use_horizon_embeddings
+        ).to(device)
+    elif args.model == 'gatlstm' and args.seq2seq:
+        model = GATLSTMSeq2Seq(
             node_feat_dim=node_feat_dim,
             edge_feat_dim=edge_feat_dim,
             hidden_dim=args.hidden_dim,
@@ -192,9 +211,23 @@ def main(args):
     print("\nStarting training...")
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
-        
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler)
+        if args.seq2seq:
+            if args.ss_epochs > 1:
+                tfr = args.ss_start + (args.ss_end - args.ss_start) * (epoch - 1) / (args.ss_epochs - 1)
+                tfr = float(max(min(tfr, 1.0), 0.0))
+            else:
+                tfr = float(args.ss_end)
+        else:
+            tfr = 0.0
+
+        train_loss = train_epoch(
+            model, train_loader, optimizer, criterion, device, edge_index, edge_attr, scaler,
+            use_amp=use_amp, amp_dtype=amp_dtype, grad_scaler=grad_scaler,
+            seq2seq=args.seq2seq, teacher_forcing_ratio=tfr
+        )
         print(f"Train Loss: {train_loss:.4f}")
+        if args.seq2seq:
+            print(f"Teacher forcing ratio: {tfr:.3f}")
         
         val_metrics = evaluate(model, val_loader, device, edge_index, edge_attr, scaler, use_amp=use_amp, amp_dtype=amp_dtype, null_val=args.null_val)
         val_mae = val_metrics['overall']['mae']
@@ -295,6 +328,14 @@ if __name__ == '__main__':
                         help='Random seed')
     parser.add_argument('--null_val', type=float, default=0.0,
                         help='Mask value for missing readings (e.g., 0.0 for METR-LA)')
+    parser.add_argument('--seq2seq', action='store_true',
+                        help='Use seq2seq decoding with the same GAT-LSTM cell')
+    parser.add_argument('--ss_start', type=float, default=1.0,
+                        help='Initial teacher forcing ratio')
+    parser.add_argument('--ss_end', type=float, default=0.5,
+                        help='Final teacher forcing ratio after ss_epochs')
+    parser.add_argument('--ss_epochs', type=int, default=20,
+                        help='Number of epochs to anneal teacher forcing ratio over')
     parser.add_argument('--use_per_node_init', action='store_true',
                         help='Use per-node learnable h0/c0 initial states')
     parser.add_argument('--use_temporal_attention', action='store_true',
