@@ -87,6 +87,11 @@ def main(args):
     print(f"Using device: {device}")
     if device.type == 'cuda':
         try:
+            print(f"CUDA device name: {torch.cuda.get_device_name(device.index)}")
+        except Exception:
+            pass
+    if device.type == 'cuda':
+        try:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             # Prefer bf16 on Ampere+ if available
